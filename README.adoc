@@ -1,0 +1,361 @@
+= Trabajo Práctico: Bases de Datos I − Segundo Semestre 2022
+Ávila Matías <leandroavmmo@gmail.com>; Perez Giannina <gianniperez2001@gmail.com>; Prieto Lucas <lucasprieto30@gmail.com>
+v1, {docdate}. Docentes Hernan Czemerinski y Hernán Rondelli (COM-01)
+:title-page:
+:numbered:
+:source-highlighter: coderay
+:tabsize: 4
+
+== Introducción
+
+Este trabajo práctico consiste en crear una base de datos de tarjetas, en la cual se almacenarán datos de los *clientes*, sus respectivas *tarjetas* y *compras*, *comercios* en donde se realizaron las compras y los detalles de éstas. Además, estará incluida la información de los *consumos*, las *alertas*, los *rechazos* y los *cierres* de cada tarjeta. Para ello, se deberá crear una tabla correspondiente a cada una de las características solicitas e incorporar las PK’s y FK’s requeridas, que a su vez el usuario puede eliminar si así lo desea.
+
+Se deben incluir también los siguientes stored procedures y/o triggers:
+
+*Autorización de compra:* Valida o rechaza una compra, dependiendo si cumple o no los siguientes requisitos: La tarjeta debe ser válida y vigente, el número de tarjeta debe ser existente y el código de seguridad de ser correcto. También, el monto total de compras pendientes de pago más la compra a realizar no debe superar el límite de compra de la tarjeta.
+
+*Generación del resumen:* Crea y guarda todos los datos necesarios para un resumen.
+
+*Alertas a clientes:* Debe detectar y almacenar alertas para avisar a los clientes sobre posibles fraudes. Éstas consisten en comprobar que las tarjetas no superen dos compras dentro de un límite de tiempo, dependiendo del código postal en donde se realizaron dichas compras. Asimismo, suspender la tarjeta si ésta tiene dos rechazos por exceso de límite en el mismo día. También se generán alertas ante cada rechazo que se registre.
+
+Por último, en el proyecto se trabajará con una base de datos no relacional basada en JSON, donde también se ingresarán datos relacionados con las tarjetas.
+
+Todas estas funcionalidades se podrán ejecutar en una aplicacion de Go.
+
+== Dificultades y decisiones
+
+- Una de las primeras dificultades que tuvimos al momento de comenzar con el trabajo, fue que no entendíamos muy bien los tipos de datos que se requerían tales como `decimal (8,2)` y `timestamp`. Esto lo resolvimos rápidamente chequeando la documentación de SQL.
+
+- Utilizamos la función `substring()` de SQL para poder determinar el valor de terminación de cierre dentro de la función `generar_resumen()`.
+
+- En varios fields decidimos cambiar su tipo de int a serial, esto para poder incrementar su valor automáticamente. Por lo tanto, al insertar los valores en las tablas, no pusimos los datos autogenerados.
+
+- En `autorizar_compra()`, no se podía testear la función con una tarjeta no existente ya que cuando se generaba el rechazo se producía un error. Este consistía en que la tabla rechazo tenía como fk a nrotarjeta, y si este número de tarjeta no existe no se realizaban los inserts correspondientes. Para solucionar esto, decidimos eliminar rechazo_nrotarjeta_fk en la tabla rechazo.
+
+== Implementación
+
+Al principio estabamos un poco desorientados sobre el enunciado y lo que debíamos hacer. Luego, entendimos que debíamos separar el trabajo en distintos archivos para poder organizarnos y contener mejor la información. Por esto, comenzamos con los archivos: *create_database.sql*, *pks_&_fks.sql*, *drop_pks_&_fks.sql* y finalmente *inserts.sql*. Estos nos ayudarían más tarde a testear de una forma eficaz las siguientes funciones ya mencionadas en la Introducción: `autorizar_compra()`, `generar_resumen()` y los triggers `alerta_rechazo()` y `alerta_compras()`.
+
+*create_database.sql:* Consiste en borrar la base de datos tarjetas si esta ya existe. Si no existe, la crea junto a las tablas correspondientes.
+[source, sql]
+----
+	DROP DATABASE IF EXISTS tarjetas;
+	CREATE DATABASE tarjetas;
+	\c tarjetas
+	CREATE TABLE cliente (nrocliente SERIAL, nombre TEXT, apellido TEXT, domicilio TEXT, telefono CHAR(12));
+	CREATE TABLE tarjeta (nrotarjeta CHAR(16), nrocliente INT, validadesde CHAR(6), validahasta CHAR(6), 		codseguridad CHAR(4), limitecompra DECIMAL(8,2), estado CHAR(10));
+	CREATE TABLE comercio (nrocomercio SERIAL, nombre TEXT, domicilio TEXT, codigopostal CHAR(8), telefono 		CHAR(12));
+	CREATE TABLE compra (nrooperacion SERIAL, nrotarjeta CHAR(16), nrocomercio INT, fecha TIMESTAMP, monto 		DECIMAL(7,2), pagado BOOLEAN);
+	CREATE TABLE rechazo (nrorechazo SERIAL, nrotarjeta CHAR(16), nrocomercio INT, fecha TIMESTAMP, monto 		DECIMAL(7,2), motivo TEXT);
+	CREATE TABLE cierre (año INT, mes INT, terminacion INT, fechainicio DATE, fechacierre DATE, fechavto DATE)	;
+	CREATE TABLE cabecera (nroresumen SERIAL, nombre TEXT, apellido TEXT, domicilio TEXT, nrotarjeta CHAR(16)	, desde DATE, hasta DATE, vence DATE, total DECIMAL(8,2));
+	CREATE TABLE detalle (nroresumen INT, nrolinea INT, fecha DATE, nombrecomercio TEXT, monto DECIMAL(7,2));
+	CREATE TABLE alerta (nroalerta SERIAL, nrotarjeta CHAR(16), fecha TIMESTAMP, nrorechazo INT, codalerta 		INT, descripcion TEXT);
+	CREATE TABLE consumo (nrotarjeta CHAR(16), codseguridad CHAR(4), nrocomercio INT, monto DECIMAL(7,2));
+----
+
+*pks_&_fks.sql:* Crea y agrega las PK's y FK's a las tablas anteriormente creadas.
+[source, sql]
+----
+-- PK’s
+ALTER TABLE cliente ADD CONSTRAINT cliente_pk PRIMARY KEY (nrocliente);
+ALTER TABLE tarjeta ADD CONSTRAINT tarjeta_pk PRIMARY KEY (nrotarjeta);
+ALTER TABLE comercio ADD CONSTRAINT comercio_pk PRIMARY KEY (nrocomercio);
+ALTER TABLE compra ADD CONSTRAINT compra_pk PRIMARY KEY (nrooperacion);
+ALTER TABLE rechazo ADD CONSTRAINT rechazo_pk PRIMARY KEY (nrorechazo);
+ALTER TABLE cierre ADD CONSTRAINT cierre_pk PRIMARY KEY (año, mes, terminacion);
+ALTER TABLE cabecera ADD CONSTRAINT cabecera_pk PRIMARY KEY (nroresumen);
+ALTER TABLE detalle ADD CONSTRAINT detalle_pk PRIMARY KEY (nroresumen, nrolinea);
+ALTER TABLE alerta ADD CONSTRAINT alerta_pk PRIMARY KEY (nroalerta);
+
+-- FK’s
+ALTER TABLE tarjeta ADD CONSTRAINT tarjeta_nrocliente_fk FOREIGN KEY (nrocliente) REFERENCES cliente (nrocliente);
+ALTER TABLE compra ADD CONSTRAINT compra_nrotarjeta_fk FOREIGN KEY (nrotarjeta) REFERENCES tarjeta (nrotarjeta);
+ALTER TABLE compra ADD CONSTRAINT compra_nrocomercio_fk FOREIGN KEY (nrocomercio) REFERENCES comercio (nrocomercio);
+ALTER TABLE rechazo ADD CONSTRAINT rechazo_nrocomercio_fk FOREIGN KEY (nrocomercio) REFERENCES comercio (nrocomercio);
+ALTER TABLE cabecera ADD CONSTRAINT cabecera_nrotarjeta_fk FOREIGN KEY (nrotarjeta) REFERENCES tarjeta (nrotarjeta);
+ALTER TABLE alerta ADD CONSTRAINT alerta_nrorechazo_fk FOREIGN KEY (nrorechazo) REFERENCES rechazo (nrorechazo);
+----
+
+*drops_pks_&_fks.sql:* Elimina las PK's y FK's anteriormente creadas.
+[source, sql]
+----
+-- FK’s Drops
+ALTER TABLE tarjeta DROP CONSTRAINT tarjeta_nrocliente_fk;
+ALTER TABLE compra DROP CONSTRAINT compra_nrotarjeta_fk;
+ALTER TABLE compra DROP CONSTRAINT compra_nrocomercio_fk;
+ALTER TABLE rechazo DROP CONSTRAINT rechazo_nrocomercio_fk;
+ALTER TABLE cabecera DROP CONSTRAINT cabecera_nrotarjeta_fk;
+ALTER TABLE alerta DROP CONSTRAINT alerta_nrorechazo_fk;
+
+-- PK’s Drops
+ALTER TABLE cliente DROP CONSTRAINT cliente_pk;
+ALTER TABLE tarjeta DROP CONSTRAINT tarjeta_pk;
+ALTER TABLE comercio DROP CONSTRAINT comercio_pk;
+ALTER TABLE compra DROP CONSTRAINT compra_pk;
+ALTER TABLE rechazo DROP CONSTRAINT rechazo_pk;
+ALTER TABLE cierre DROP CONSTRAINT cierre_pk;
+ALTER TABLE cabecera DROP CONSTRAINT cabecera_pk;
+ALTER TABLE detalle DROP CONSTRAINT detalle_pk;
+ALTER TABLE alerta DROP CONSTRAINT alerta_pk;
+----
+
+*inserts.sql:* Inserta todos los valores requeridos a sus respectivas tablas (clientes, comercios, tarjetas, cierres y consumos).
+[source, sql]
+----
+-- Clientes
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Matias', 'Avila', '9 de Julio 2302', '541112321232');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Giannina', 'Perez', 'Panamericana Km 36.5', '541145678970');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Lucas', 'Prieto', 'Av. Pres. Arturo Umberto Illia 3770', '541142335678');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Guadalupe', 'Torres', 'Av. Victorica 1128', '541134521789');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Tomas', 'Gutierrez', 'Formosa y Ruta 52', '541167789012');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Juan', 'Ugarte', 'Quevedo 3365', '541146578974');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Sergio', 'Messi', 'Av. Del Libertador 6820', '541156920932');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Santiago', 'Pereyra', 'Paraná 3745', '541154648972');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Karina', 'Castan', 'San Martín 546', '541176853412');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Emiliano', 'Ayala', 'Sarmiento 2157', '541156748921');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Fabian', 'Moreno', 'Juan Julian Lastra 2400', '541145769276');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Jorge', 'Peron', 'Av Nestor C. Kirchner 1142', '541125678970');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Federico', 'Santillan', 'Josiah Williams 209', '541178929283');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Sebastian', 'Rodriguez', 'Perito Moreno 1460', '541176526341');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Camila', 'Martin', 'San Martín 800', '541154327801');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Tania', 'Rojo', 'Av. España 309', '541134679086');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Belen', 'Aristimuño', 'Av. Libertad 254', '541197367361');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Morena', 'Dominguez', 'Av. Sáenz Peña 318', '541121340968');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Paola', 'Tugas', 'Enrique Bodereau 7571', '541197656291');
+INSERT INTO cliente (nombre, apellido, domicilio, telefono) VALUES ('Paulo', 'Gomez', 'Recta Martinoli 8357', '541187561264');
+----
+
+*autorizar_compras.sql:* Crea la función `autorizar_compra()`, que toma como parámetros el número de tarjeta, el código de seguridad, el número de comercio y el monto de una compra. Devuelve true si se aprueba la compra o false si se rechaza.
+[source, sql]
+----
+CREATE OR REPLACE FUNCTION autorizar_compra(n_tarjeta tarjeta.nrotarjeta%type,
+                                                cod_seg tarjeta.codseguridad%type,
+                                                    n_comercio compra.nrocomercio%type,
+                                                        monto_compra compra.monto%type) RETURNS boolean as $$
+DECLARE
+    tarjeta_fila record; -- Fila de tarjeta de nrodetarjeta pasada por parametro
+    fecha_actual DATE;   -- Fecha del dia actual.
+    fecha_vencimiento DATE; -- Fecha de tope de vencimiento de la tarjeta pasada por parametro.
+    comercio_encontrado INT; -- numero de comercio pasado, que exista.
+    fecha_de_vencimiento_text TEXT;  -- Donde guardo la fecha de tarjeta de vencimiento como texto.
+	monto_total_compras_tarjeta_actual compra.monto%type; -- Monto total de compras actuales de la tarjeta pasada por parametro.
+BEGIN
+
+    -- Seleccion de fila completa de la tarjeta filtrado por nrotarjeta.
+    SELECT * INTO tarjeta_fila FROM tarjeta t WHERE n_tarjeta = t.nrotarjeta;
+    
+    -- Control de la existencia de nrotarjeta pasada por parametro.
+    IF NOT found then
+        INSERT INTO rechazo (nrotarjeta, nrocomercio, fecha, monto, motivo) 
+            VALUES (n_tarjeta, n_comercio, current_timestamp, monto_compra, 'Tarjeta no valida o no vigente.');
+    
+        return false;
+	ELSE
+		-- Seleccion de fecha de vencimiento de la tarjeta pasada por nrotarjeta pasado por parametro.
+		SELECT CAST(validahasta AS TEXT) INTO fecha_de_vencimiento_text FROM tarjeta t WHERE n_tarjeta = t.nrotarjeta;
+
+		-- Asignacion a variable el valor de monto total de compras realizadas por la tarjeta pasada por parametro.
+		SELECT SUM(monto) INTO monto_total_compras_tarjeta_actual FROM compra c WHERE n_tarjeta = c.nrotarjeta and c.pagado = false;
+		IF monto_total_compras_tarjeta_actual IS NULL then
+			monto_total_compras_tarjeta_actual := 0;
+		END IF;
+
+		-- Conversion y Asignacion de fechas como type DATE
+		fecha_actual := CURRENT_DATE;
+		fecha_vencimiento := TO_DATE(fecha_de_vencimiento_text, 'YYYYMM');
+
+		-- Control de codigo de seguridad correcto
+		IF tarjeta_fila.codseguridad != cod_seg then
+			INSERT INTO rechazo (nrotarjeta, nrocomercio, fecha, monto, motivo)  
+				VALUES (n_tarjeta, n_comercio, current_timestamp, monto_compra, 'Codigo de seguridad invalido.');
+			
+			return false;
+		
+		--Control que el monto total de compras de la tarjeta no supere el limite permitido de la misma.
+		ELSIF monto_compra + monto_total_compras_tarjeta_actual  >= tarjeta_fila.limitecompra then
+			INSERT INTO rechazo (nrotarjeta, nrocomercio, fecha, monto, motivo)
+				VALUES (n_tarjeta, n_comercio, current_timestamp, monto_compra, 'Supera límite de tarjeta');
+
+			return false;
+		
+		-- Control de que la tarjeta no este vencida.
+		ELSIF  fecha_actual > fecha_vencimiento then
+			INSERT INTO rechazo (nrotarjeta, nrocomercio, fecha, monto, motivo)
+				VALUES (n_tarjeta, n_comercio, current_timestamp, monto_compra, 'Plazo de vigencia expirado.');
+		
+			return false;
+
+		--Control de tarjeta que no este suspendida.
+		ELSIF tarjeta_fila.estado = 'suspendida' then
+			INSERT INTO rechazo (nrotarjeta, nrocomercio, fecha, monto, motivo)
+				VALUES (n_tarjeta, n_comercio, current_timestamp, monto_compra, 'La Tarjeta se encuentra suspendida.');
+		
+			return false;
+		
+		-- Si pasa todos los controles, se efectua la compra por autorizar y se inserta en la tabla correspondiente retornando.
+		ELSE
+			INSERT INTO compra (nrotarjeta, nrocomercio, fecha, monto, pagado)
+				VALUES (n_tarjeta, n_comercio, current_timestamp, monto_compra, false);
+
+			return true;
+		END IF;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+----
+
+*generar_resumen.sql:* Crea la función `generar_resumen()`, que toma como parámetros un número de cliente, un año y un mes. No devuelve nada, sino que inserta datos en cabecera y en detalle.
+[source, sql]
+----
+ CREATE OR REPLACE FUNCTION generar_resumen (n_cliente cliente.nrocliente%TYPE, aux_año INT, aux_mes INT) 		RETURNS void AS $$
+
+        DECLARE
+
+	    
+	    n_linea INT := 1;
+	    aux_cliente RECORD;
+	    aux_compra RECORD;
+	    aux_tarjeta RECORD;
+	    aux_cierre RECORD;
+	    aux_comercio RECORD;
+            n_resumen cabecera.nroresumen%type;
+            monto_total cabecera.total%type;
+
+        BEGIN
+
+                --guardo cliente pasado por parametro en aux_cliente
+                SELECT * INTO aux_cliente FROM cliente WHERE nrocliente = n_cliente;
+	                IF NOT FOUND THEN --compruebo que n_cliente pasado por parametro sea valido
+	      		        RAISE 'El número de cliente % no existe.', n_cliente;
+  		        END IF;
+
+                --recorro la o las tarjetas del cliente
+                FOR aux_tarjeta IN SELECT * FROM tarjeta WHERE nrocliente = aux_cliente.nrocliente LOOP
+        
+		        monto_total := 0; --reinicio total a pagar
+
+                        --guardo cierre de la tarjeta en aux_cierre, uso substring para saber su numero de 		terminacion y lo paso a int
+		        SELECT * INTO aux_cierre FROM cierre WHERE año = aux_año AND mes = aux_mes
+                                AND terminacion = substring(aux_tarjeta.nrotarjeta, 16, 1)::INT;
+
+                        --creo cabecera sin nroresumen ya que es serial y se crea automaticamente
+                        --total = 0
+                        INSERT INTO cabecera (nombre, apellido, domicilio, nrotarjeta, desde, hasta, vence, 	total)
+                                VALUES (aux_cliente.nombre, aux_cliente.apellido, aux_cliente.domicilio, 		aux_tarjeta.nrotarjeta, aux_cierre.fechainicio, aux_cierre.fechacierre, aux_cierre.fechavto, monto_total);
+
+                        --guardo nroresumen autogenerado en n_resumen para usarlo en detalle
+                        SELECT nroresumen INTO n_resumen FROM cabecera WHERE nrotarjeta = aux_tarjeta.			nrotarjeta
+                                AND desde = aux_cierre.fechainicio AND hasta = aux_cierre.fechacierre;
+
+                        --recorro compras
+                        FOR aux_compra IN SELECT * FROM compra WHERE nrotarjeta = aux_tarjeta.nrotarjeta AND 	fecha >= aux_cierre.fechainicio AND fecha <= aux_cierre.fechacierre AND pagado = false LOOP
+
+                                --guardo comercio en aux_comercio
+                                SELECT * INTO aux_comercio FROM comercio WHERE nrocomercio = aux_compra.		nrocomercio;
+
+                                --creo detalle
+                                INSERT INTO detalle (nroresumen, nrolinea, fecha, nombrecomercio, monto)
+                                        VALUES (n_resumen, aux_nrolinea, aux_compra.fecha, aux_comercio.		nombre, aux_compra.monto);
+			        n_linea := n_linea + 1; --incremento n_linea
+                                monto_total := monto_total + aux_compra.monto; --incremento total
+                                UPDATE compra SET pagado = true WHERE nrooperacion = aux_compra.nrooperacion; 		--actualizo bool pagado
+                        END LOOP;
+
+                        UPDATE cabecera SET total = monto_total WHERE nrotarjeta = aux_tarjeta.nrotarjeta 		--actualizo total en cabecera
+                                AND desde = aux_cierre.fechainicio AND hasta = aux_cierre.fechacierre;
+                        
+                END LOOP;
+        END;
+$$ LANGUAGE plpgsql;
+----
+
+*alerta_rechazo.sql:* Crea las funciones y triggers `alerta_rechazo()` y `alerta_compras()` que se encargan de generar las alertas correspondientes ante rechazos y compras sospechosas. Implementa la función auxiliar `es_mismo_dia()` para comparar fechas y retornar un boolean indicando si corresponden al mismo dia.
+[source, sql]
+----
+CREATE OR REPLACE FUNCTION alerta_rechazo() RETURNS TRIGGER AS $$
+BEGIN
+	
+	PERFORM * FROM rechazo r WHERE r.nrotarjeta = NEW.nrotarjeta
+									AND r.nrorechazo != NEW.nrorechazo
+									AND EXTRACT(DAY FROM r.fecha) = EXTRACT(DAY FROM new.fecha)
+									AND EXTRACT(MONTH FROM r.fecha) = EXTRACT(MONTH FROM new.fecha)
+									AND EXTRACT(YEAR FROM r.fecha) = EXTRACT(YEAR FROM new.fecha)
+									AND r.motivo = 'Supera límite de tarjeta'
+									AND new.motivo = 'Supera límite de tarjeta';
+	IF FOUND THEN
+		UPDATE tarjeta SET estado = 'suspendida' WHERE nrotarjeta = new.nrotarjeta;
+		INSERT INTO alerta (nrotarjeta, fecha, nrorechazo, codalerta, descripcion) VALUES (new.nrotarjeta, CURRENT_TIMESTAMP, new.nrorechazo, 32, 'Tarjeta suspendida por compras excedidas del límite');
+	END IF;
+	INSERT INTO alerta (nrotarjeta, fecha, nrorechazo, codalerta, descripcion) VALUES (NEW.nrotarjeta, CURRENT_TIMESTAMP, NEW.nrorechazo, 0, NEW.motivo);
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION es_mismo_dia(fecha1 TIMESTAMP, fecha2 TIMESTAMP) RETURNS BOOLEAN AS $$
+DECLARE
+	anio_fecha1 INT;
+	anio_fecha2 INT;
+	mes_fecha1 INT;
+	mes_fecha2 INT;
+	dia_fecha1 INT;
+	dia_fecha2 INT;
+BEGIN
+	SELECT EXTRACT INTO anio_fecha1 (YEAR FROM fecha1);
+	SELECT EXTRACT INTO anio_fecha2 (YEAR FROM fecha2);
+	SELECT EXTRACT INTO mes_fecha1 (MONTH FROM fecha1);
+	SELECT EXTRACT INTO mes_fecha2 (MONTH FROM fecha2);
+	SELECT EXTRACT INTO dia_fecha1 (DAY FROM fecha1);
+	SELECT EXTRACT INTO dia_fecha2 (DAY FROM fecha2);
+	
+	IF anio_fecha1 = anio_fecha2 AND mes_fecha1 = mes_fecha2 AND dia_fecha1 = dia_fecha2 THEN
+		RETURN TRUE;
+	ELSE
+		RETURN  FALSE;
+	END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION alerta_compras() RETURNS TRIGGER AS $$
+DECLARE
+	ultima_compra record;
+	codigo_postal_ultima_compra comercio.codigopostal%TYPE;
+	codigo_postal_compra_actual comercio.codigopostal%TYPE;
+	diferencia_minutos INT;
+	mismo_dia BOOLEAN;
+	
+BEGIN
+	SELECT INTO ultima_compra * FROM compra WHERE nrotarjeta = new.nrotarjeta ORDER BY fecha DESC LIMIT 1;
+	SELECT INTO codigo_postal_ultima_compra codigopostal FROM comercio WHERE nrocomercio = ultima_compra.nrocomercio;
+	SELECT INTO codigo_postal_compra_actual codigopostal FROM comercio WHERE nrocomercio = new.nrocomercio;
+	mismo_dia := es_mismo_dia(NEW.fecha, ultima_compra.fecha);
+	SELECT EXTRACT INTO diferencia_minutos (MINUTES FROM (NEW.fecha - ultima_compra.fecha));
+	
+	IF NEW.nrocomercio != ultima_compra.nrocomercio AND codigo_postal_compra_actual = codigo_postal_ultima_compra AND mismo_dia = true AND diferencia_minutos < 1 THEN
+		INSERT INTO alerta (nrotarjeta, fecha, codalerta, descripcion) VALUES (NEW.nrotarjeta, CURRENT_TIMESTAMP, 1, 'Se realizaron dos compras en el mismo minuto en tiendas distintas');
+	END IF;
+	
+	IF codigo_postal_compra_actual != codigo_postal_ultima_compra AND mismo_dia = true AND diferencia_minutos < 5 THEN
+		INSERT INTO alerta (nrotarjeta, fecha, codalerta, descripcion) VALUES (NEW.nrotarjeta, CURRENT_TIMESTAMP, 5, 'Se realizaron dos compras en 5 minutos en localidades distintas');
+	END IF;
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER alerta_rechazo_trigger
+AFTER INSERT ON rechazo
+FOR EACH ROW
+EXECUTE PROCEDURE alerta_rechazo();
+
+CREATE OR REPLACE TRIGGER alerta_compras_trigger
+BEFORE INSERT ON compra
+FOR EACH ROW
+EXECUTE PROCEDURE alerta_compras();
+----
+
+== Conclusiones
+
+Este trabajo fue un poco arduo ya que teníamos poco tiempo para realizarlo. Sin embargo, al ser tres integrantes en el grupo, fue suficiente para organizarnos y comenzar a trabajar de tal forma que todos entendieramos el avance de los demás.
+
+Como aprendizaje de este proyecto, lo que más destacamos es la búsqueda correcta de documentación, ya que nos facilita mucho el trabajo y nos será de ayuda más adelante. Como cierre, podemos decir que estamos satisfechos con nuestro producto terminado ya que realiza todas las funciones requeridas y además, el código quedó prolijo y limpio.
