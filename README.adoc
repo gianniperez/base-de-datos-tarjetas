@@ -1,5 +1,5 @@
 = Base de Datos Tarjetas − 2022
-Ávila Matías <leandroavmmo@gmail.com>; Perez Giannina <gianniperez2001@gmail.com>; Prieto Lucas <lucasprieto30@gmail.com>
+Perez Giannina <gianniperez2001@gmail.com>
 v1, {docdate}. Docentes Hernan Czemerinski y Hernán Rondelli (COM-01)
 :title-page:
 :numbered:
@@ -24,11 +24,11 @@ Por último, en el proyecto se trabajará con una base de datos no relacional ba
 
 *cliNoSQL.go:* Base de datos NoSQL basada en JSON (BoltDB), aplicación CLi escrita en Go para ejecutar el código. Comando de ejecución: go run cliNoSQL.go
 
-*cliSQL.go* Base de datos SQL, aplicación CLi escrita en Go para ejecutar el código. Comando de ejecución: go run cliSQL.go
+*cliSQL.go:* Base de datos SQL, aplicación CLi escrita en Go para ejecutar el código. Comando de ejecución: go run cliSQL.go
 
-*go.mod* Archivo necesario para la ejecución rápida de las aplicaciones CLI.
+*go.mod:* Archivo necesario para la ejecución rápida de las aplicaciones CLI.
 
-*go.sum* Archivo necesario para la ejecución rápida de las aplicaciones CLI.
+*go.sum:* Archivo necesario para la ejecución rápida de las aplicaciones CLI.
 
 *create_database.sql:* Consiste en borrar la base de datos tarjetas si esta ya existe. Si no existe, la crea junto a las tablas correspondientes.
 
